@@ -67,8 +67,12 @@ if spend_file and commitment_file:
         st.dataframe(comparison_df)
 
         spend_series = period_spend["spend"]
-
-        suggestion = suggest_method(spend_series)
+        has_seasonality = st.checkbox(
+            "Use seasonal forecasting if data appears seasonal",
+            value=False
+            )
+        
+        suggestion = suggest_method(spend_series, has_seasonality=has_seasonality)
 
         st.subheader("Suggested Method")
         st.write(f"**Suggested method:** {suggestion['suggested_method']}")

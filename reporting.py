@@ -168,7 +168,7 @@ def analyze_spend_diagnostics(spend):
     }
 
 
-def suggest_method(spend, has_project_estimations=False, expected_monthly_spend=None):
+def suggest_method(spend, has_project_estimations=False, expected_monthly_spend=None, has_seasonality=False):
     diagnostics = analyze_spend_diagnostics(spend)
 
     n = diagnostics["n"]
@@ -201,6 +201,13 @@ def suggest_method(spend, has_project_estimations=False, expected_monthly_spend=
             "diagnostics": diagnostics
         }
 
+    if has_seasonality and n>=24:
+        return {
+            "suggested_method": "holtwinters_triple_exponential_smoothing_forecast",
+            "reason": "User specified data is seasonal, so Holt-Winters is preferred.",
+            "diagnostics": diagnostics
+        }
+
     if diagnostics["recent_level_off"]:
         return {
             "suggested_method": "single_exponential_smoothing_forecast",
@@ -208,14 +215,6 @@ def suggest_method(spend, has_project_estimations=False, expected_monthly_spend=
             "diagnostics": diagnostics
         }
     
-    #if diagnostics["has_seasonality"] and n >= 24:
-    #    return {
-    #        "suggested_method": "holtwinters_triple_exponential_smoothing_forecast",
-    #        "reason": "At least 24 months of data are available and a seasonality signal was detected.",
-    #        "diagnostics": diagnostics
-    #    }
-
-
     if diagnostics["has_trend"] and not diagnostics["is_volatile"]:
         return {
             "suggested_method": "holt_double_exponential_smoothing_forecast",
@@ -237,9 +236,10 @@ def suggest_method(spend, has_project_estimations=False, expected_monthly_spend=
             "diagnostics": diagnostics
         }
 
+
     return {
-        "suggested_method": "run_rate_forecast",
-        "reason": "No strong trend, seasonality, or stabilization pattern was detected, so run rate is used as a baseline.",
+        "suggested_method": "moving_average_forecast",
+        "reason": "No strong trend, seasonality, or stabilization pattern was detected, so moving averageis used as a baseline.",
         "diagnostics": diagnostics
     }
 
