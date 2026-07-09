@@ -9,7 +9,7 @@ from forecasting import (
     single_exponential_smoothing_forecast,
     holt_double_exponential_smoothing_forecast,
     holtwinters_triple_exponential_smoothing_forecast,
-    monthly_expectation_based_forecast,
+    manual_scenario_mode,
     project_expectation_forecast
 )
 
@@ -182,7 +182,7 @@ def suggest_method(spend, has_project_estimations=False, expected_monthly_spend=
 
     if n == 0 and expected_monthly_spend is not None:
         return {
-            "suggested_method": "monthly_expectation_based_forecast",
+            "suggested_method": "manual_scenario_mode",
             "reason": "No historical spend data is available, but an expected monthly spend was provided.",
             "diagnostics": diagnostics
         }
@@ -266,12 +266,19 @@ def generate_cloud_report(spend_data, commitments, cloud, project_adjustments=No
     spend = period_spend["spend"]
     actual_cost_to_date = spend.sum()
 
-    last_spend_month = period_spend["year_month"].max()
-    months_remaining = (
-        (period_end.year - last_spend_month.year) * 12
-        + (period_end.month - last_spend_month.month)
-    )
-
+    if len(period_spend) > 0:
+        last_spend_month = period_spend["year_month"].max()
+        months_remaining = (
+            (period_end.year - last_spend_month.year) * 12
+            + (period_end.month - last_spend_month.month)
+        )
+    else:
+        last_spend_month = period_start - pd.DateOffset(months=1)
+        months_remaining = (
+            (period_end.year - period_start.year) * 12
+            + (period_end.month - period_start.month)
+            + 1
+        )
     
     suggestion = suggest_method(
         spend,
@@ -294,8 +301,8 @@ def generate_cloud_report(spend_data, commitments, cloud, project_adjustments=No
     elif method == "run_rate_forecast":
         forecast_result = run_rate_forecast(spend, months_remaining)
 
-    elif method == "monthly_expectation_based_forecast":
-        forecast_result = monthly_expectation_based_forecast(expected_monthly_spend, months_remaining)
+    elif method == "manual_scenario_mode":
+        forecast_result = manual_scenario_mode(expected_monthly_spend, months_remaining)
 
     elif method == "project_expectation_forecast":
         base_forecast_result = run_rate_forecast(spend, months_remaining)
@@ -325,20 +332,28 @@ def generate_cloud_report(spend_data, commitments, cloud, project_adjustments=No
             "message": f"{method} could not produce a forecast for the available data.",
             "suggestion": suggestion
         }
-    
+
+    if len(project_adjustments) > 0:
+        forecast_result = project_expectation_forecast(
+        forecast_result,
+        project_adjustments
+        )
+
     gap_analysis = forecast_gap(
         actual_cost_to_date=actual_cost_to_date,
         future_spend_total=forecast_result["future_spend_total"],
         commitment=commitment
     )
 
-    required_growth = required_growth_rate(
-        current_monthly_spend=spend.iloc[-1],
-        actual_cost_to_date=actual_cost_to_date,
-        commitment=commitment,
-        months_remaining=months_remaining
-    )
-
+    if len(spend) > 0 and months_remaining > 0:
+        required_growth = required_growth_rate(
+            current_monthly_spend=spend.iloc[-1],
+            actual_cost_to_date=actual_cost_to_date,
+            commitment=commitment,
+            months_remaining=months_remaining
+        )
+    else:
+        required_growth = None
     return {
         "cloud": cloud,
         "method_used": method,
@@ -348,7 +363,6 @@ def generate_cloud_report(spend_data, commitments, cloud, project_adjustments=No
         "required_monthly_growth_rate (%)": required_growth,
         "monthly_forecasts": forecast_result["monthly_forecasts"],
         **gap_analysis      }
-
 
 def compare_statistical_methods(spend_data, commitments, cloud):
     

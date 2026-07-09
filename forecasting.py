@@ -110,14 +110,19 @@ def holtwinters_triple_exponential_smoothing_forecast(spend, months_remaining, s
 
 ################## Business Information Forecasting Methods #####################################################
 
-def monthly_expectation_based_forecast(expected_monthly_spend, months_remaining):
-    monthly_forecasts = [expected_monthly_spend] * months_remaining
-    future_spend_total = sum(monthly_forecasts)
-    return {
-        "method": "monthly_expectation",
-        "monthly_forecasts": monthly_forecasts,
-        "future_spend_total": future_spend_total}
+def manual_scenario_mode(expected_monthly_spend, months_remaining):
+    if isinstance(expected_monthly_spend, list):
+        monthly_forecasts = expected_monthly_spend
+    else:
+        monthly_forecasts = [expected_monthly_spend] * int(months_remaining)
 
+    future_spend_total = sum(monthly_forecasts)
+
+    return {
+        "method": "manual_scenario",
+        "monthly_forecasts": monthly_forecasts,
+        "future_spend_total": future_spend_total
+    }
 
 def project_expectation_forecast(base_forecast_result, project_adjustments):
     # project_adjustments should be a list with one entry per future month, like this: [0, 0, 10000, 10000, 5000]
