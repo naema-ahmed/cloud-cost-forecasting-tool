@@ -231,7 +231,7 @@ def suggest_method(spend, has_project_estimations=False, has_seasonality=False):
 
     return {
         "suggested_method": "moving_average_forecast",
-        "reason": "No strong trend, seasonality, or stabilization pattern was detected, so moving averageis used as a baseline.",
+        "reason": "No strong trend or stabilization pattern was detected, so moving average is used as a baseline.",
         "diagnostics": diagnostics
     }
 
