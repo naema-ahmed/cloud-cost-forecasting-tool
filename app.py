@@ -13,7 +13,7 @@ from reporting import (
 st.set_page_config(
     page_title="Overcast",
     page_icon="☁️",
-    layout="wide"
+    layout="centered"
 )
 
 def make_json_safe(obj):
