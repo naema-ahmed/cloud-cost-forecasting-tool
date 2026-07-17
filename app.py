@@ -13,7 +13,7 @@ from reporting import (
 st.set_page_config(
     page_title="Overcast",
     page_icon="☁️",
-    layout="centered"
+    layout="wide",
 )
 
 def make_json_safe(obj):
@@ -229,7 +229,7 @@ if spend_file and commitment_file:
             cloud=selected_cloud
         )
 
-        st.dataframe(comparison_df)
+        st.table(comparison_df)
 
         spend_series = period_spend["spend"]
         has_seasonality = st.checkbox("Use seasonal forecasting if data appears seasonal", 

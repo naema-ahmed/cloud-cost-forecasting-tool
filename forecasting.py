@@ -7,14 +7,23 @@ def moving_average_forecast(spend, months_remaining, window=3):
     if len(spend) == 0:
         return None
 
-    monthly_forecast = spend.tail(window).mean()
-    monthly_forecasts = [monthly_forecast] * months_remaining
+    # Convert pandas Series to list for efficient sequential appending
+    spend_list = spend.tolist()
+    monthly_forecasts = []
+
+    for _ in range(months_remaining):
+        current_window = spend_list[-window:] # selecting the last 'window' number of months from data
+        next_month_forecast = sum(current_window) / len(current_window) # calculating the average of selected window
+        monthly_forecasts.append(next_month_forecast) # store the forecasted spend
+        spend_list.append(next_month_forecast) # append spend list so window moves a step foward next iteration
+
     future_spend_total = sum(monthly_forecasts)
 
     return {
         "method": "moving_average",
         "monthly_forecasts": monthly_forecasts,
-        "future_spend_total": future_spend_total }
+        "future_spend_total": future_spend_total
+    }
 
 
 def run_rate_forecast(spend, months_remaining):
