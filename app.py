@@ -764,6 +764,13 @@ def generate_report_pptx(report):
 
     presentation = Presentation()
 
+    method_display = (
+        str(report["method_used"])
+        .replace("_forecast", "")
+        .replace("_", " ")
+        .title()
+    )
+
     presentation.slide_width = Inches(13.333)
     presentation.slide_height = Inches(7.5)
 
@@ -812,12 +819,6 @@ def generate_report_pptx(report):
         else f"{float(required_growth):.2f}%"
     )
 
-    method_display = (
-        str(report["method_used"])
-        .replace("_forecast", "")
-        .replace("_", " ")
-        .title()
-    )
 
     summary_metrics = [
         (
