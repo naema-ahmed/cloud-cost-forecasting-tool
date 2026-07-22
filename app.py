@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 from pptx import Presentation
 from pptx.util import Inches, Pt
+from pptx.enum.text import PP_ALIGN
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, landscape
@@ -767,20 +768,28 @@ def generate_report_pptx(report):
     presentation.slide_height = Inches(7.5)
 
     # Slide 1: Title
-    title_slide = presentation.slides.add_slide(
-        presentation.slide_layouts[0]
+    title_slide = presentation.slides.add_slide(presentation.slide_layouts[0])
+
+    title = title_slide.shapes.title
+    title.text = (
+        f"Overcast: {report['cloud']} Cloud Cost Forecast"
     )
 
-    title_slide.shapes.title.text = (
-        f"Overcast: {report['cloud']} "
-        "Cloud Cost Forecast"
+    title.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+
+    subtitle = title_slide.placeholders[1]
+    subtitle.text = (
+        f"{report['period_start']} to {report['period_end']}\n"
+        f"Method: {method_display}"
     )
 
-    title_slide.placeholders[1].text = (
-        f"{report['period_start']} to "
-        f"{report['period_end']}\n"
-        f"Method: {report['method_used']}"
-    )
+    for paragraph in subtitle.text_frame.paragraphs:
+        paragraph.alignment = PP_ALIGN.CENTER
+
+    title.text_frame.paragraphs[0].font.size = Pt(30)
+
+    for paragraph in subtitle.text_frame.paragraphs:
+        paragraph.font.size = Pt(18)
 
     # Slide 2: Forecast Summary 
     
@@ -924,7 +933,7 @@ def generate_report_pptx(report):
     months_paragraph.space_before = Pt(10)
 
     # Slide 3: Monthly Forecast Chart
-    
+
     forecast_slide = presentation.slides.add_slide(
         presentation.slide_layouts[6]
     )
