@@ -141,7 +141,6 @@ def create_forecast_figure(report):
         ax.plot(
             pd.to_datetime(report["historical_dates"]),
             report["historical_spend"],
-            marker="o",
             label="Historical",
         )
 
@@ -149,7 +148,6 @@ def create_forecast_figure(report):
         ax.plot(
             pd.to_datetime(report["forecast_dates"]),
             report["monthly_forecasts"],
-            marker="o",
             label="Forecast",
         )
 
@@ -185,7 +183,6 @@ def create_cumulative_figure(report):
         ax.plot(
             pd.to_datetime(report["historical_dates"]),
             historical_cumulative,
-            marker="o",
             linewidth=2,
             label="Historical cumulative",
         )
@@ -207,7 +204,6 @@ def create_cumulative_figure(report):
         ax.plot(
             pd.to_datetime(report["forecast_dates"]),
             forecast_cumulative,
-            marker="o",
             linewidth=2,
             label="Forecast cumulative",
         )
@@ -325,106 +321,172 @@ def generate_report_pdf(report):
         else f"{float(required_growth):.2f}%"
     )
 
-    summary_data = [
-        ["Metric", "Value"],
+    metric_label_style = ParagraphStyle(
+        "MetricLabel",
+        parent=styles["BodyText"],
+        fontSize=9,
+        leading=11,
+        textColor=colors.HexColor("#4A5568"),
+        spaceAfter=4,
+    )
+
+    metric_value_style = ParagraphStyle(
+        "MetricValue",
+        parent=styles["BodyText"],
+        fontSize=20,
+        leading=23,
+        textColor=colors.HexColor("#1F2937"),
+    )
+
+    detail_label_style = ParagraphStyle(
+        "DetailLabel",
+        parent=styles["BodyText"],
+        fontSize=10,
+        leading=13,
+        textColor=colors.HexColor("#1F2937"),
+    )
+
+    required_growth = report["required_monthly_growth_rate (%)"]
+
+    required_growth_text = (
+        "N/A"
+        if required_growth is None
+        else f"{float(required_growth):.2f}%"
+    )
+
+    metric_cells = [
         [
-            "Actual Cost to Date",
-            f"${float(report['actual_cost_to_date']):,.2f}",
+            Paragraph(
+                "Actual Cost to Date",
+                metric_label_style,
+            ),
+            Paragraph(
+                "Forecasted Total Spend",
+                metric_label_style,
+            ),
+            Paragraph(
+                "Commitment",
+                metric_label_style,
+            ),
         ],
         [
-            "Future Spend Forecast",
-            f"${float(report['future_spend_total']):,.2f}",
+            Paragraph(
+                f"${float(report['actual_cost_to_date']):,.2f}",
+                metric_value_style,
+            ),
+            Paragraph(
+                f"${float(report['forecasted_total_spend']):,.2f}",
+                metric_value_style,
+            ),
+            Paragraph(
+                f"${float(report['commitment']):,.2f}",
+                metric_value_style,
+            ),
         ],
         [
-            "Forecasted Total Spend",
-            f"${float(report['forecasted_total_spend']):,.2f}",
+            Paragraph(
+                "Gap",
+                metric_label_style,
+            ),
+            Paragraph(
+                "Future Spend Forecast",
+                metric_label_style,
+            ),
+            Paragraph(
+                "Required Monthly Growth",
+                metric_label_style,
+            ),
         ],
         [
-            "Commitment",
-            f"${float(report['commitment']):,.2f}",
-        ],
-        [
-            "Gap",
-            f"${float(report['gap']):,.2f}",
-        ],
-        [
-            "Required Monthly Growth",
-            required_growth_text,
-        ],
-        [
-            "Months Remaining",
-            str(report["months_remaining"]),
+            Paragraph(
+                f"${float(report['gap']):,.2f}",
+                metric_value_style,
+            ),
+            Paragraph(
+                f"${float(report['future_spend_total']):,.2f}",
+                metric_value_style,
+            ),
+            Paragraph(
+                required_growth_text,
+                metric_value_style,
+            ),
         ],
     ]
 
-    summary_table = Table(
-        summary_data,
+    metric_layout = Table(
+        metric_cells,
         colWidths=[
-            3.1 * inch,
-            2.4 * inch,
+            3.25 * inch,
+            3.25 * inch,
+            3.25 * inch,
+        ],
+        rowHeights=[
+            0.25 * inch,
+            0.55 * inch,
+            0.25 * inch,
+            0.55 * inch,
         ],
     )
 
-    summary_table.setStyle(
+    metric_layout.setStyle(
         TableStyle(
             [
-                (
-                    "BACKGROUND",
-                    (0, 0),
-                    (-1, 0),
-                    colors.HexColor("#DCE6F1"),
-                ),
-                (
-                    "FONTNAME",
-                    (0, 0),
-                    (-1, 0),
-                    "Helvetica-Bold",
-                ),
-                (
-                    "FONTNAME",
-                    (0, 1),
-                    (0, -1),
-                    "Helvetica-Bold",
-                ),
-                (
-                    "ALIGN",
-                    (1, 1),
-                    (1, -1),
-                    "RIGHT",
-                ),
-                (
-                    "GRID",
-                    (0, 0),
-                    (-1, -1),
-                    0.5,
-                    colors.grey,
-                ),
-                (
-                    "ROWBACKGROUNDS",
-                    (0, 1),
-                    (-1, -1),
-                    [
-                        colors.white,
-                        colors.HexColor("#F5F5F5"),
-                    ],
-                ),
-                (
-                    "TOPPADDING",
-                    (0, 0),
-                    (-1, -1),
-                    7,
-                ),
-                (
-                    "BOTTOMPADDING",
-                    (0, 0),
-                    (-1, -1),
-                    7,
-                ),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 18),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
             ]
         )
     )
 
-    story.append(summary_table)
+    story.append(metric_layout)
+    story.append(Spacer(1, 20))
+
+    method_display = (
+        str(report["method_used"])
+        .replace("_forecast", "")
+        .replace("_", " ")
+        .title()
+    )
+
+    story.append(
+        Paragraph(
+            f"<b>Status:</b> {report['status']}",
+            detail_label_style,
+        )
+    )
+
+    story.append(Spacer(1, 10))
+
+    story.append(
+        Paragraph(
+            f"<b>Method used:</b> {method_display}",
+            detail_label_style,
+        )
+    )
+
+    story.append(Spacer(1, 10))
+
+    story.append(
+        Paragraph(
+            (
+                f"<b>Period:</b> {report['period_start']} "
+                f"to {report['period_end']}"
+            ),
+            detail_label_style,
+        )
+    )
+
+    story.append(Spacer(1, 10))
+
+    story.append(
+        Paragraph(
+            f"<b>Months remaining:</b> {report['months_remaining']}",
+            detail_label_style,
+        )
+    )
+
     story.append(PageBreak())
 
     forecast_fig = create_forecast_figure(report)
@@ -721,6 +783,7 @@ def generate_report_pptx(report):
     )
 
     # Slide 2: Forecast Summary 
+    
     summary_slide = presentation.slides.add_slide(
         presentation.slide_layouts[6]
     )
@@ -740,14 +803,17 @@ def generate_report_pptx(report):
         else f"{float(required_growth):.2f}%"
     )
 
-    summary_items = [
+    method_display = (
+        str(report["method_used"])
+        .replace("_forecast", "")
+        .replace("_", " ")
+        .title()
+    )
+
+    summary_metrics = [
         (
             "Actual Cost to Date",
             f"${float(report['actual_cost_to_date']):,.2f}",
-        ),
-        (
-            "Future Spend Forecast",
-            f"${float(report['future_spend_total']):,.2f}",
         ),
         (
             "Forecasted Total Spend",
@@ -762,76 +828,103 @@ def generate_report_pptx(report):
             f"${float(report['gap']):,.2f}",
         ),
         (
+            "Future Spend Forecast",
+            f"${float(report['future_spend_total']):,.2f}",
+        ),
+        (
             "Required Monthly Growth",
             required_growth_text,
         ),
-        (
-            "Status",
-            str(report["status"]),
-        ),
-        (
-            "Months Remaining",
-            str(report["months_remaining"]),
-        ),
     ]
 
-    table_shape = summary_slide.shapes.add_table(
-        len(summary_items) + 1,
-        2,
-        Inches(2.1),
-        Inches(1.25),
-        Inches(9.1),
-        Inches(5.3),
-    )
+    metric_positions = [
+        (0.6, 1.15),
+        (4.75, 1.15),
+        (8.9, 1.15),
+        (0.6, 2.75),
+        (4.75, 2.75),
+        (8.9, 2.75),
+    ]
 
-    table = table_shape.table
-
-    table.columns[0].width = Inches(4.8)
-    table.columns[1].width = Inches(4.3)
-
-    table.cell(0, 0).text = "Metric"
-    table.cell(0, 1).text = "Value"
-
-    format_ppt_table_cell(
-        table.cell(0, 0),
-        font_size=18,
-        bold=True,
-    )
-
-    format_ppt_table_cell(
-        table.cell(0, 1),
-        font_size=18,
-        bold=True,
-    )
-
-    for row_index, (
-        metric,
+    for (
+        label,
         value,
-    ) in enumerate(
-        summary_items,
-        start=1,
+    ), (
+        left,
+        top,
+    ) in zip(
+        summary_metrics,
+        metric_positions,
     ):
-        table.cell(
-            row_index,
-            0,
-        ).text = metric
-
-        table.cell(
-            row_index,
-            1,
-        ).text = value
-
-        format_ppt_table_cell(
-            table.cell(row_index, 0),
-            font_size=16,
+        label_box = summary_slide.shapes.add_textbox(
+            Inches(left),
+            Inches(top),
+            Inches(3.7),
+            Inches(0.35),
         )
 
-        format_ppt_table_cell(
-            table.cell(row_index, 1),
-            font_size=16,
+        label_paragraph = (
+            label_box.text_frame.paragraphs[0]
         )
+
+        label_paragraph.text = label
+        label_paragraph.font.size = Pt(11)
+
+        value_box = summary_slide.shapes.add_textbox(
+            Inches(left),
+            Inches(top + 0.35),
+            Inches(3.7),
+            Inches(0.65),
+        )
+
+        value_paragraph = (
+            value_box.text_frame.paragraphs[0]
+        )
+
+        value_paragraph.text = value
+        value_paragraph.font.size = Pt(23)
+        value_paragraph.font.bold = False
+
+    details_box = summary_slide.shapes.add_textbox(
+        Inches(0.6),
+        Inches(4.35),
+        Inches(12.0),
+        Inches(2.4),
+    )
+
+    details_frame = details_box.text_frame
+    details_frame.clear()
+
+    status_paragraph = details_frame.paragraphs[0]
+    status_paragraph.text = (
+        f"Status: {report['status']}"
+    )
+    status_paragraph.font.size = Pt(13)
+
+    method_paragraph = details_frame.add_paragraph()
+    method_paragraph.text = (
+        f"Method used: {method_display}"
+    )
+    method_paragraph.font.size = Pt(13)
+    method_paragraph.space_before = Pt(10)
+
+    period_paragraph = details_frame.add_paragraph()
+    period_paragraph.text = (
+        f"Period: {report['period_start']} "
+        f"to {report['period_end']}"
+    )
+    period_paragraph.font.size = Pt(13)
+    period_paragraph.space_before = Pt(10)
+
+    months_paragraph = details_frame.add_paragraph()
+    months_paragraph.text = (
+        f"Months remaining: {report['months_remaining']}"
+    )
+    months_paragraph.font.size = Pt(13)
+    months_paragraph.space_before = Pt(10)
 
     # Slide 3: Monthly Forecast Chart
+    
     forecast_slide = presentation.slides.add_slide(
         presentation.slide_layouts[6]
     )
@@ -1446,9 +1539,7 @@ if (
 
     if st.button(
         "Generate Report",
-        disabled=generate_disabled,
-        type="primary",
-    ):
+        disabled=generate_disabled):
         try:
             report = generate_cloud_report(
                 spend_data=spend_data,
