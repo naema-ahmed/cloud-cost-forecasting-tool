@@ -1,14 +1,37 @@
 import json
-import numpy as np
-import streamlit as st
-import pandas as pd
+from io import BytesIO
+
 import matplotlib.pyplot as plt
-from validation import spend_data_validation, commitment_data_validation
+import numpy as np
+import pandas as pd
+import streamlit as st
+from pptx import Presentation
+from pptx.util import Inches, Pt
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import (
+    Image,
+    PageBreak,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
+
+from validation import (
+    commitment_data_validation,
+    spend_data_validation,
+)
 from reporting import (
     compare_statistical_methods,
     generate_cloud_report,
-    suggest_method
+    suggest_method,
 )
+
 
 st.set_page_config(
     page_title="Overcast",
@@ -16,31 +39,79 @@ st.set_page_config(
     layout="wide",
 )
 
+
+#### Data & serialization helpers ####################################################
+#### -> to turn in-memory program objects into JSON text format ######################
+
 def make_json_safe(obj):
+    """Converts NumPy and pandas values into JSON-safe Python values."""
+
     if isinstance(obj, dict):
-        return {key: make_json_safe(value) for key, value in obj.items()}
+        return {
+            key: make_json_safe(value)
+            for key, value in obj.items()
+        }
+
     if isinstance(obj, list):
-        return [make_json_safe(value) for value in obj]
+        return [
+            make_json_safe(value)
+            for value in obj
+        ]
+
+    if isinstance(obj, tuple):
+        return [
+            make_json_safe(value)
+            for value in obj
+        ]
+
     if isinstance(obj, pd.Timestamp):
         return obj.strftime("%Y-%m")
+
     if isinstance(obj, np.integer):
         return int(obj)
+
     if isinstance(obj, np.floating):
         return float(obj)
+
     if isinstance(obj, np.bool_):
         return bool(obj)
+
     return obj
 
 
-def add_report_display_data(report, period_spend, period_start):
+def add_report_display_data(
+    report,
+    period_spend,
+    period_start,
+):
+    """Adds historical and forecast dates needed in displaying / exporting a generated report."""
+
     report = report.copy()
+
+    period_spend = period_spend.sort_values(
+        "year_month"
+    ).copy()
 
     has_history = len(period_spend) > 0
 
     if has_history:
-        historical_dates = period_spend["year_month"].dt.strftime("%Y-%m").tolist()
-        historical_spend = period_spend["spend"].tolist()
-        forecast_start = period_spend["year_month"].max() + pd.DateOffset(months=1)
+        historical_dates = (
+            period_spend["year_month"]
+            .dt.strftime("%Y-%m")
+            .tolist()
+        )
+
+        historical_spend = (
+            period_spend["spend"]
+            .astype(float)
+            .tolist()
+        )
+
+        forecast_start = (
+            period_spend["year_month"].max()
+            + pd.DateOffset(months=1)
+        )
+
     else:
         historical_dates = []
         historical_spend = []
@@ -49,7 +120,7 @@ def add_report_display_data(report, period_spend, period_start):
     forecast_dates = pd.date_range(
         start=forecast_start,
         periods=len(report["monthly_forecasts"]),
-        freq="MS"
+        freq="MS",
     ).strftime("%Y-%m").tolist()
 
     report["historical_dates"] = historical_dates
@@ -59,159 +130,1109 @@ def add_report_display_data(report, period_spend, period_start):
     return make_json_safe(report)
 
 
-def display_report(report):
-    col1, col2, col3 = st.columns(3)
+#### Plotting Helpers ###########################################################
 
-    col1.metric("Actual Cost to Date", f"${report['actual_cost_to_date']:,.2f}")
-    col2.metric("Forecasted Total Spend", f"${report['forecasted_total_spend']:,.2f}")
-    col3.metric("Commitment", f"${report['commitment']:,.2f}")
-
-    col4, col5, col6 = st.columns(3)
-
-    col4.metric("Gap", f"${report['gap']:,.2f}")
-    col5.metric("Future Spend Forecast", f"${report['future_spend_total']:,.2f}")
-
-    required_growth = report["required_monthly_growth_rate (%)"]
-    col6.metric(
-        "Required Monthly Growth",
-        "N/A" if required_growth is None else f"{required_growth:.2f}%"
-    )
-
-    st.write(f"**Status:** {report['status']}")
-    st.write(f"**Method used:** {report['method_used']}")
-    st.write(f"**Period:** {report['period_start']} to {report['period_end']}")
-    st.write(f"**Months remaining:** {report['months_remaining']}")
-
-    st.subheader("Monthly Forecast")
-
-    forecast_df = pd.DataFrame({
-        "month": report["forecast_dates"],
-        "forecasted_spend": report["monthly_forecasts"]
-    })
-
-    st.dataframe(forecast_df)
-
-    st.subheader("Forecast Plot")
+def create_forecast_figure(report):
+    """Create the historical and forecast monthly spend chart."""
 
     fig, ax = plt.subplots(figsize=(10, 5))
 
-    if len(report["historical_dates"]) > 0:
+    if report["historical_dates"]:
         ax.plot(
             pd.to_datetime(report["historical_dates"]),
             report["historical_spend"],
-            label="Historical"
+            marker="o",
+            label="Historical",
         )
 
-    ax.plot(
-        pd.to_datetime(report["forecast_dates"]),
-        report["monthly_forecasts"],
-        label="Forecast"
-    )
+    if report["forecast_dates"]:
+        ax.plot(
+            pd.to_datetime(report["forecast_dates"]),
+            report["monthly_forecasts"],
+            marker="o",
+            label="Forecast",
+        )
 
-    ax.set_title(f"{report['cloud']} Historical and Forecasted Cloud Spend")
+    ax.set_title(
+        f"{report['cloud']} Historical and Forecasted Cloud Spend"
+    )
     ax.set_xlabel("Month")
     ax.set_ylabel("Cost")
-    ax.legend()
     ax.tick_params(axis="x", rotation=45)
+    ax.grid(alpha=0.25)
+    ax.legend()
 
-    st.pyplot(fig)
+    fig.tight_layout()
 
-    st.subheader("Cumulative Spend vs Commitment")
+    return fig
+
+
+def create_cumulative_figure(report):
+    """Create the cumulative spend against commitment chart."""
 
     fig, ax = plt.subplots(figsize=(10, 5))
 
-    historical_cumulative = pd.Series(report["historical_spend"]).cumsum().tolist()
+    historical_cumulative = (
+        pd.Series(
+            report["historical_spend"],
+            dtype=float,
+        )
+        .cumsum()
+        .tolist()
+    )
 
-    if len(report["historical_dates"]) > 0:
+    if report["historical_dates"]:
         ax.plot(
             pd.to_datetime(report["historical_dates"]),
             historical_cumulative,
+            marker="o",
             linewidth=2,
-            label="Historical cumulative"
+            label="Historical cumulative",
         )
+
         cumulative_start = historical_cumulative[-1]
+
     else:
-        cumulative_start = 0
+        cumulative_start = 0.0
 
     forecast_cumulative = (
-        cumulative_start + pd.Series(report["monthly_forecasts"]).cumsum()
+        cumulative_start
+        + pd.Series(
+            report["monthly_forecasts"],
+            dtype=float,
+        ).cumsum()
     ).tolist()
 
-    ax.plot(
-        pd.to_datetime(report["forecast_dates"]),
-        forecast_cumulative,
-        linewidth=2,
-        label="Forecast cumulative"
-    )
+    if report["forecast_dates"]:
+        ax.plot(
+            pd.to_datetime(report["forecast_dates"]),
+            forecast_cumulative,
+            marker="o",
+            linewidth=2,
+            label="Forecast cumulative",
+        )
 
     ax.axhline(
-        y=report["commitment"],
+        y=float(report["commitment"]),
         linestyle="--",
         linewidth=2,
-        label="Commitment"
+        label="Commitment",
     )
 
-    ax.set_title(f"{report['cloud']}: Cumulative Spend vs Commitment")
+    ax.set_title(
+        f"{report['cloud']}: Cumulative Spend vs Commitment"
+    )
     ax.set_xlabel("Month")
     ax.set_ylabel("Cumulative Spend")
     ax.tick_params(axis="x", rotation=45)
+    ax.grid(alpha=0.25)
     ax.legend()
 
-    st.pyplot(fig)
+    fig.tight_layout()
+
+    return fig
+
+
+def figure_to_png(fig):
+    """Convert a Matplotlib figure into an in-memory PNG."""
+
+    image_buffer = BytesIO()
+
+    fig.savefig(
+        image_buffer,
+        format="png",
+        dpi=180,
+        bbox_inches="tight",
+    )
+
+    image_buffer.seek(0)
+
+    return image_buffer
+
+
+#### PDF Export of Report #######################################################
+
+def generate_report_pdf(report):
+    """Generate a PDF version of the report."""
+
+    pdf_buffer = BytesIO()
+
+    document = SimpleDocTemplate(
+        pdf_buffer,
+        pagesize=landscape(A4),
+        rightMargin=36,
+        leftMargin=36,
+        topMargin=30,
+        bottomMargin=30,
+    )
+
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "ReportTitle",
+        parent=styles["Title"],
+        fontSize=22,
+        leading=26,
+        alignment=TA_CENTER,
+        spaceAfter=16,
+    )
+
+    heading_style = ParagraphStyle(
+        "ReportHeading",
+        parent=styles["Heading2"],
+        fontSize=14,
+        leading=18,
+        spaceBefore=10,
+        spaceAfter=8,
+    )
+
+    story = []
+
+    story.append(
+        Paragraph(
+            (
+                f"Overcast: {report['cloud']} "
+                "Cloud Cost Forecast"
+            ),
+            title_style,
+        )
+    )
+
+    story.append(
+        Paragraph(
+            (
+                f"<b>Commitment period:</b> "
+                f"{report['period_start']} to "
+                f"{report['period_end']}<br/>"
+                f"<b>Forecasting method:</b> "
+                f"{report['method_used']}<br/>"
+                f"<b>Status:</b> "
+                f"{report['status']}"
+            ),
+            styles["BodyText"],
+        )
+    )
+
+    story.append(Spacer(1, 14))
+
+    required_growth = report[
+        "required_monthly_growth_rate (%)"
+    ]
+
+    required_growth_text = (
+        "N/A"
+        if required_growth is None
+        else f"{float(required_growth):.2f}%"
+    )
+
+    summary_data = [
+        ["Metric", "Value"],
+        [
+            "Actual Cost to Date",
+            f"${float(report['actual_cost_to_date']):,.2f}",
+        ],
+        [
+            "Future Spend Forecast",
+            f"${float(report['future_spend_total']):,.2f}",
+        ],
+        [
+            "Forecasted Total Spend",
+            f"${float(report['forecasted_total_spend']):,.2f}",
+        ],
+        [
+            "Commitment",
+            f"${float(report['commitment']):,.2f}",
+        ],
+        [
+            "Gap",
+            f"${float(report['gap']):,.2f}",
+        ],
+        [
+            "Required Monthly Growth",
+            required_growth_text,
+        ],
+        [
+            "Months Remaining",
+            str(report["months_remaining"]),
+        ],
+    ]
+
+    summary_table = Table(
+        summary_data,
+        colWidths=[
+            3.1 * inch,
+            2.4 * inch,
+        ],
+    )
+
+    summary_table.setStyle(
+        TableStyle(
+            [
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (-1, 0),
+                    colors.HexColor("#DCE6F1"),
+                ),
+                (
+                    "FONTNAME",
+                    (0, 0),
+                    (-1, 0),
+                    "Helvetica-Bold",
+                ),
+                (
+                    "FONTNAME",
+                    (0, 1),
+                    (0, -1),
+                    "Helvetica-Bold",
+                ),
+                (
+                    "ALIGN",
+                    (1, 1),
+                    (1, -1),
+                    "RIGHT",
+                ),
+                (
+                    "GRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.5,
+                    colors.grey,
+                ),
+                (
+                    "ROWBACKGROUNDS",
+                    (0, 1),
+                    (-1, -1),
+                    [
+                        colors.white,
+                        colors.HexColor("#F5F5F5"),
+                    ],
+                ),
+                (
+                    "TOPPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    7,
+                ),
+                (
+                    "BOTTOMPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    7,
+                ),
+            ]
+        )
+    )
+
+    story.append(summary_table)
+    story.append(PageBreak())
+
+    forecast_fig = create_forecast_figure(report)
+    forecast_image = figure_to_png(forecast_fig)
+    plt.close(forecast_fig)
+
+    story.append(
+        Paragraph(
+            "Monthly Spend Forecast",
+            heading_style,
+        )
+    )
+
+    story.append(
+        Image(
+            forecast_image,
+            width=9.7 * inch,
+            height=4.8 * inch,
+        )
+    )
+
+    story.append(PageBreak())
+
+    cumulative_fig = create_cumulative_figure(report)
+    cumulative_image = figure_to_png(cumulative_fig)
+    plt.close(cumulative_fig)
+
+    story.append(
+        Paragraph(
+            "Cumulative Spend vs Commitment",
+            heading_style,
+        )
+    )
+
+    story.append(
+        Image(
+            cumulative_image,
+            width=9.7 * inch,
+            height=4.8 * inch,
+        )
+    )
+
+    story.append(PageBreak())
+
+    story.append(
+        Paragraph(
+            "Monthly Forecast Values",
+            heading_style,
+        )
+    )
+
+    forecast_table_data = [
+        [
+            "Month",
+            "Forecasted Spend",
+        ]
+    ]
+
+    for month, forecast in zip(
+        report["forecast_dates"],
+        report["monthly_forecasts"],
+    ):
+        forecast_table_data.append(
+            [
+                month,
+                f"${float(forecast):,.2f}",
+            ]
+        )
+
+    forecast_table = Table(
+        forecast_table_data,
+        colWidths=[
+            2.5 * inch,
+            2.5 * inch,
+        ],
+        repeatRows=1,
+    )
+
+    forecast_table.setStyle(
+        TableStyle(
+            [
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (-1, 0),
+                    colors.HexColor("#DCE6F1"),
+                ),
+                (
+                    "FONTNAME",
+                    (0, 0),
+                    (-1, 0),
+                    "Helvetica-Bold",
+                ),
+                (
+                    "ALIGN",
+                    (1, 1),
+                    (1, -1),
+                    "RIGHT",
+                ),
+                (
+                    "GRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.5,
+                    colors.grey,
+                ),
+                (
+                    "ROWBACKGROUNDS",
+                    (0, 1),
+                    (-1, -1),
+                    [
+                        colors.white,
+                        colors.HexColor("#F5F5F5"),
+                    ],
+                ),
+                (
+                    "TOPPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6,
+                ),
+                (
+                    "BOTTOMPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6,
+                ),
+            ]
+        )
+    )
+
+    story.append(forecast_table)
+
+    document.build(story)
+
+    pdf_buffer.seek(0)
+
+    return pdf_buffer.getvalue()
+
+
+###### PowerPoint Export of Report ###################################################
+
+def add_slide_title(slide, title):
+    """Adds a title to a blank PowerPoint slide."""
+
+    title_box = slide.shapes.add_textbox(
+        Inches(0.6),
+        Inches(0.25),
+        Inches(12.1),
+        Inches(0.7),
+    )
+
+    paragraph = title_box.text_frame.paragraphs[0]
+    paragraph.text = title
+    paragraph.font.size = Pt(26)
+    paragraph.font.bold = True
+
+
+def format_ppt_table_cell(
+    cell,
+    font_size=14,
+    bold=False,
+):
+    """Formats a PowerPoint table cell."""
+
+    for paragraph in cell.text_frame.paragraphs:
+        paragraph.font.size = Pt(font_size)
+        paragraph.font.bold = bold
+
+
+def add_monthly_forecast_slides(
+    presentation,
+    report,
+    rows_per_slide=12,
+):
+    """Adds monthly forecast table slides in sections."""
+
+    forecast_rows = list(
+        zip(
+            report["forecast_dates"],
+            report["monthly_forecasts"],
+        )
+    )
+
+    if not forecast_rows:
+        return
+
+    for start_index in range(
+        0,
+        len(forecast_rows),
+        rows_per_slide,
+    ):
+        row_chunk = forecast_rows[
+            start_index:start_index + rows_per_slide
+        ]
+
+        slide = presentation.slides.add_slide(
+            presentation.slide_layouts[6]
+        )
+
+        if len(forecast_rows) > rows_per_slide:
+            slide_number = (
+                start_index // rows_per_slide
+            ) + 1
+
+            title = (
+                "Monthly Forecast "
+                f"(Part {slide_number})"
+            )
+        else:
+            title = "Monthly Forecast"
+
+        add_slide_title(slide, title)
+
+        table_shape = slide.shapes.add_table(
+            len(row_chunk) + 1,
+            2,
+            Inches(2.2),
+            Inches(1.2),
+            Inches(8.9),
+            Inches(5.7),
+        )
+
+        table = table_shape.table
+
+        table.columns[0].width = Inches(4.0)
+        table.columns[1].width = Inches(4.9)
+
+        table.cell(0, 0).text = "Month"
+        table.cell(0, 1).text = "Forecasted Spend"
+
+        format_ppt_table_cell(
+            table.cell(0, 0),
+            font_size=15,
+            bold=True,
+        )
+
+        format_ppt_table_cell(
+            table.cell(0, 1),
+            font_size=15,
+            bold=True,
+        )
+
+        for row_index, (
+            month,
+            forecast,
+        ) in enumerate(
+            row_chunk,
+            start=1,
+        ):
+            table.cell(
+                row_index,
+                0,
+            ).text = str(month)
+
+            table.cell(
+                row_index,
+                1,
+            ).text = f"${float(forecast):,.2f}"
+
+            format_ppt_table_cell(
+                table.cell(row_index, 0),
+                font_size=13,
+            )
+
+            format_ppt_table_cell(
+                table.cell(row_index, 1),
+                font_size=13,
+            )
+
+
+def generate_report_pptx(report):
+    """Generates a PowerPoint version of the report."""
+
+    presentation = Presentation()
+
+    presentation.slide_width = Inches(13.333)
+    presentation.slide_height = Inches(7.5)
+
+    # Slide 1: Title
+    title_slide = presentation.slides.add_slide(
+        presentation.slide_layouts[0]
+    )
+
+    title_slide.shapes.title.text = (
+        f"Overcast: {report['cloud']} "
+        "Cloud Cost Forecast"
+    )
+
+    title_slide.placeholders[1].text = (
+        f"{report['period_start']} to "
+        f"{report['period_end']}\n"
+        f"Method: {report['method_used']}"
+    )
+
+    # Slide 2: Forecast Summary 
+    summary_slide = presentation.slides.add_slide(
+        presentation.slide_layouts[6]
+    )
+
+    add_slide_title(
+        summary_slide,
+        "Forecast Summary",
+    )
+
+    required_growth = report[
+        "required_monthly_growth_rate (%)"
+    ]
+
+    required_growth_text = (
+        "N/A"
+        if required_growth is None
+        else f"{float(required_growth):.2f}%"
+    )
+
+    summary_items = [
+        (
+            "Actual Cost to Date",
+            f"${float(report['actual_cost_to_date']):,.2f}",
+        ),
+        (
+            "Future Spend Forecast",
+            f"${float(report['future_spend_total']):,.2f}",
+        ),
+        (
+            "Forecasted Total Spend",
+            f"${float(report['forecasted_total_spend']):,.2f}",
+        ),
+        (
+            "Commitment",
+            f"${float(report['commitment']):,.2f}",
+        ),
+        (
+            "Gap",
+            f"${float(report['gap']):,.2f}",
+        ),
+        (
+            "Required Monthly Growth",
+            required_growth_text,
+        ),
+        (
+            "Status",
+            str(report["status"]),
+        ),
+        (
+            "Months Remaining",
+            str(report["months_remaining"]),
+        ),
+    ]
+
+    table_shape = summary_slide.shapes.add_table(
+        len(summary_items) + 1,
+        2,
+        Inches(2.1),
+        Inches(1.25),
+        Inches(9.1),
+        Inches(5.3),
+    )
+
+    table = table_shape.table
+
+    table.columns[0].width = Inches(4.8)
+    table.columns[1].width = Inches(4.3)
+
+    table.cell(0, 0).text = "Metric"
+    table.cell(0, 1).text = "Value"
+
+    format_ppt_table_cell(
+        table.cell(0, 0),
+        font_size=18,
+        bold=True,
+    )
+
+    format_ppt_table_cell(
+        table.cell(0, 1),
+        font_size=18,
+        bold=True,
+    )
+
+    for row_index, (
+        metric,
+        value,
+    ) in enumerate(
+        summary_items,
+        start=1,
+    ):
+        table.cell(
+            row_index,
+            0,
+        ).text = metric
+
+        table.cell(
+            row_index,
+            1,
+        ).text = value
+
+        format_ppt_table_cell(
+            table.cell(row_index, 0),
+            font_size=16,
+        )
+
+        format_ppt_table_cell(
+            table.cell(row_index, 1),
+            font_size=16,
+        )
+
+    # Slide 3: Monthly Forecast Chart
+    forecast_slide = presentation.slides.add_slide(
+        presentation.slide_layouts[6]
+    )
+
+    add_slide_title(
+        forecast_slide,
+        "Historical and Forecasted Spend",
+    )
+
+    forecast_fig = create_forecast_figure(report)
+    forecast_image = figure_to_png(forecast_fig)
+    plt.close(forecast_fig)
+
+    forecast_slide.shapes.add_picture(
+        forecast_image,
+        Inches(0.9),
+        Inches(1.1),
+        width=Inches(11.6),
+        height=Inches(5.8),
+    )
+
+    # Slide 4: Cumulative Forecast Chart
+    cumulative_slide = presentation.slides.add_slide(
+        presentation.slide_layouts[6]
+    )
+
+    add_slide_title(
+        cumulative_slide,
+        "Cumulative Spend vs Commitment",
+    )
+
+    cumulative_fig = create_cumulative_figure(
+        report
+    )
+
+    cumulative_image = figure_to_png(
+        cumulative_fig
+    )
+
+    plt.close(cumulative_fig)
+
+    cumulative_slide.shapes.add_picture(
+        cumulative_image,
+        Inches(0.9),
+        Inches(1.1),
+        width=Inches(11.6),
+        height=Inches(5.8),
+    )
+
+    # Slides 5-End: Monthly Forecast Tables
+    add_monthly_forecast_slides(
+        presentation=presentation,
+        report=report,
+        rows_per_slide=12,
+    )
+
+    pptx_buffer = BytesIO()
+
+    presentation.save(pptx_buffer)
+
+    pptx_buffer.seek(0)
+
+    return pptx_buffer.getvalue()
+
+
+#### Streamlit Report Display ##################################
+
+
+def display_report(report):
+    """Display a generated or loaded report in Streamlit."""
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric(
+        "Actual Cost to Date",
+        f"${float(report['actual_cost_to_date']):,.2f}",
+    )
+
+    col2.metric(
+        "Forecasted Total Spend",
+        f"${float(report['forecasted_total_spend']):,.2f}",
+    )
+
+    col3.metric(
+        "Commitment",
+        f"${float(report['commitment']):,.2f}",
+    )
+
+    col4, col5, col6 = st.columns(3)
+
+    col4.metric(
+        "Gap",
+        f"${float(report['gap']):,.2f}",
+    )
+
+    col5.metric(
+        "Future Spend Forecast",
+        f"${float(report['future_spend_total']):,.2f}",
+    )
+
+    required_growth = report[
+        "required_monthly_growth_rate (%)"
+    ]
+
+    col6.metric(
+        "Required Monthly Growth",
+        (
+            "N/A"
+            if required_growth is None
+            else f"{float(required_growth):.2f}%"
+        ),
+    )
+
+    st.write(
+        f"**Status:** {report['status']}"
+    )
+
+    st.write(
+        f"**Method used:** {report['method_used']}"
+    )
+
+    st.write(
+        (
+            f"**Period:** {report['period_start']} "
+            f"to {report['period_end']}"
+        )
+    )
+
+    st.write(
+        f"**Months remaining:** "
+        f"{report['months_remaining']}"
+    )
+
+    st.subheader("Monthly Forecast")
+
+    forecast_df = pd.DataFrame(
+        {
+            "Month": report["forecast_dates"],
+            "Forecasted Spend": report[
+                "monthly_forecasts"
+            ],
+        }
+    )
+
+    st.dataframe(
+        forecast_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.subheader("Forecast Plot")
+
+    forecast_fig = create_forecast_figure(
+        report
+    )
+
+    st.pyplot(forecast_fig)
+
+    plt.close(forecast_fig)
+
+    st.subheader(
+        "Cumulative Spend vs Commitment"
+    )
+
+    cumulative_fig = create_cumulative_figure(
+        report
+    )
+
+    st.pyplot(cumulative_fig)
+
+    plt.close(cumulative_fig)
 
     with st.expander("View raw report data"):
         st.json(report)
 
+
+def display_download_buttons(
+    report,
+    cloud_name,
+):
+    """Display JSON, PDF, and PowerPoint download buttons."""
+
+    report_json = json.dumps(
+        report,
+        indent=4,
+    )
+
+    try:
+        report_pdf = generate_report_pdf(
+            report
+        )
+    except Exception as error:
+        report_pdf = None
+
+        st.error(
+            f"PDF generation failed: {error}"
+        )
+
+    try:
+        report_pptx = generate_report_pptx(
+            report
+        )
+    except Exception as error:
+        report_pptx = None
+
+        st.error(
+            f"PowerPoint generation failed: {error}"
+        )
+
+    st.subheader("Download Report")
+
+    download_col1, download_col2, download_col3 = (
+        st.columns(3)
+    )
+
+    download_col1.download_button(
+        label="Download JSON",
+        data=report_json,
+        file_name=(
+            f"Overcast_{cloud_name}_report.json"
+        ),
+        mime="application/json",
+        use_container_width=True,
+    )
+
+    if report_pdf is not None:
+        download_col2.download_button(
+            label="Download PDF",
+            data=report_pdf,
+            file_name=(
+                f"Overcast_{cloud_name}_report.pdf"
+            ),
+            mime="application/pdf",
+            use_container_width=True,
+        )
+
+    if report_pptx is not None:
+        download_col3.download_button(
+            label="Download PowerPoint",
+            data=report_pptx,
+            file_name=(
+                f"Overcast_{cloud_name}_report.pptx"
+            ),
+            mime=(
+                "application/vnd.openxmlformats-"
+                "officedocument.presentationml."
+                "presentation"
+            ),
+            use_container_width=True,
+        )
+
+
+### Session state ########################################################
+
+if "generated_report" not in st.session_state:
+    st.session_state.generated_report = None
+
+if "generated_report_cloud" not in st.session_state:
+    st.session_state.generated_report_cloud = None
+
+
+### Application interface (UI) ############################################
+
 st.title("Overcast")
 st.caption("A cloud cost forecasting tool.")
 
+
+# Load report section
 st.subheader("Load Saved Report")
 
 saved_report_file = st.file_uploader(
     "Upload saved report JSON",
-    type=["json"]
+    type=["json"],
+    key="saved_report_uploader",
 )
 
-if saved_report_file:
-    saved_report = json.load(saved_report_file)
-    display_report(saved_report)
+if saved_report_file is not None:
+    try:
+        saved_report = json.load(
+            saved_report_file
+        )
 
+        st.success(
+            "Saved report loaded successfully."
+        )
+
+        display_report(saved_report)
+
+        loaded_cloud = saved_report.get(
+            "cloud",
+            "Cloud",
+        )
+
+        display_download_buttons(
+            report=saved_report,
+            cloud_name=loaded_cloud,
+        )
+
+    except (
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as error:
+        st.error(
+            f"Unable to load the report: {error}"
+        )
+
+
+# Upload data section
 st.subheader("1. Upload Data")
 
-spend_file = st.file_uploader("Upload spend data CSV", type=["csv"])
-commitment_file = st.file_uploader("Upload commitment data CSV", type=["csv"])
+spend_file = st.file_uploader(
+    "Upload spend data CSV",
+    type=["csv"],
+    key="spend_uploader",
+)
 
-if spend_file and commitment_file:
-    spend_data = spend_data_validation(pd.read_csv(spend_file))
-    commitments_data = commitment_data_validation(pd.read_csv(commitment_file))
+commitment_file = st.file_uploader(
+    "Upload commitment data CSV",
+    type=["csv"],
+    key="commitment_uploader",
+)
+
+
+if (
+    spend_file is not None
+    and commitment_file is not None
+):
+    try:
+        spend_data = spend_data_validation(
+            pd.read_csv(spend_file)
+        )
+
+        commitments_data = (
+            commitment_data_validation(
+                pd.read_csv(commitment_file)
+            )
+        )
+
+    except Exception as error:
+        st.error(
+            f"Data validation failed: {error}"
+        )
+
+        st.stop()
 
     st.success("Data loaded successfully.")
 
-    with st.expander("View uploaded spend data"):
-        st.dataframe(spend_data)
+    with st.expander(
+        "View uploaded spend data"
+    ):
+        st.dataframe(
+            spend_data,
+            use_container_width=True,
+        )
 
-    with st.expander("View uploaded commitment data"):
-        st.dataframe(commitments_data)
+    with st.expander(
+        "View uploaded commitment data"
+    ):
+        st.dataframe(
+            commitments_data,
+            use_container_width=True,
+        )
 
     selected_cloud = st.selectbox(
         "Select cloud provider",
-        commitments_data["cloud"].unique()
+        commitments_data["cloud"].unique(),
     )
 
     cloud_commitment = commitments_data[
-        commitments_data["cloud"] == selected_cloud
+        commitments_data["cloud"]
+        == selected_cloud
     ].iloc[0]
 
-    period_start = cloud_commitment["period_start"]
-    period_end = cloud_commitment["period_end"]
-
-    period_spend = spend_data[
-        (spend_data["cloud"] == selected_cloud) &
-        (spend_data["year_month"] >= period_start) &
-        (spend_data["year_month"] <= period_end)
+    period_start = cloud_commitment[
+        "period_start"
     ]
 
-    has_historical_data = len(period_spend) > 0
+    period_end = cloud_commitment[
+        "period_end"
+    ]
+
+    period_spend = spend_data[
+        (
+            spend_data["cloud"]
+            == selected_cloud
+        )
+        & (
+            spend_data["year_month"]
+            >= period_start
+        )
+        & (
+            spend_data["year_month"]
+            <= period_end
+        )
+    ].sort_values("year_month")
+
+    has_historical_data = (
+        len(period_spend) > 0
+    )
 
     selected_method = None
     project_adjustments = []
@@ -219,121 +1240,292 @@ if spend_file and commitment_file:
     st.subheader("2. Forecast Setup")
 
     if has_historical_data:
-        st.write("Historical spend data was found for this cloud and commitment period.")
-
-        st.subheader("Forecast Method Comparison")
-
-        comparison_df = compare_statistical_methods(
-            spend_data=spend_data,
-            commitments=commitments_data,
-            cloud=selected_cloud
+        st.write(
+            (
+                "Historical spend data was found "
+                "for this cloud and commitment period."
+            )
         )
 
-        st.table(comparison_df)
+        st.subheader(
+            "Forecast Method Comparison"
+        )
 
-        spend_series = period_spend["spend"]
-        has_seasonality = st.checkbox("Use seasonal forecasting if data appears seasonal", 
-                                      value=False,
-                                      help="Allows Holt-Winters forecasting when at least 24 months of data are available. Use if a seasonal pattern is expected."
-                                      )
-        
-        suggestion = suggest_method(spend_series, has_seasonality=has_seasonality)
+        try:
+            comparison_df = (
+                compare_statistical_methods(
+                    spend_data=spend_data,
+                    commitments=commitments_data,
+                    cloud=selected_cloud,
+                )
+            )
+
+            st.dataframe(
+                comparison_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        except Exception as error:
+            st.warning(
+                (
+                    "The forecast comparison could "
+                    f"not be generated: {error}"
+                )
+            )
+
+        spend_series = period_spend[
+            "spend"
+        ]
+
+        has_seasonality = st.checkbox(
+            (
+                "Use seasonal forecasting "
+                "if data appears seasonal"
+            ),
+            value=False,
+            help=(
+                "Allows Holt-Winters forecasting "
+                "when at least 24 months of data "
+                "are available. Use this when a "
+                "seasonal pattern is expected."
+            ),
+        )
+
+        suggestion = suggest_method(
+            spend_series,
+            has_seasonality=has_seasonality,
+        )
 
         st.subheader("Suggested Method")
-        st.write(f"**Suggested method:** {suggestion['suggested_method']}")
-        st.write(f"**Reason:** {suggestion['reason']}")
+
+        st.write(
+            (
+                "**Suggested method:** "
+                f"{suggestion['suggested_method']}"
+            )
+        )
+
+        st.write(
+            f"**Reason:** {suggestion['reason']}"
+        )
 
         with st.expander("View diagnostics"):
-            st.json(suggestion["diagnostics"])
+            st.json(
+                suggestion["diagnostics"]
+            )
 
         method_options = [
             "run_rate_forecast",
             "moving_average_forecast",
             "historic_growth_forecast",
-            "single_exponential_smoothing_forecast",
-            "holt_double_exponential_smoothing_forecast",
-            "holtwinters_triple_exponential_smoothing_forecast"
+            (
+                "single_exponential_"
+                "smoothing_forecast"
+            ),
+            (
+                "holt_double_exponential_"
+                "smoothing_forecast"
+            ),
+            (
+                "holtwinters_triple_"
+                "exponential_smoothing_forecast"
+            ),
         ]
 
         default_index = (
-            method_options.index(suggestion["suggested_method"])
-            if suggestion["suggested_method"] in method_options
+            method_options.index(
+                suggestion["suggested_method"]
+            )
+            if suggestion["suggested_method"]
+            in method_options
             else 0
         )
 
         selected_method = st.selectbox(
             "Choose method for final report",
             method_options,
-            index=default_index
+            index=default_index,
         )
 
-        apply_project_adjustments = st.checkbox(
-            "Apply planned project adjustment"
+        apply_project_adjustments = (
+            st.checkbox(
+                "Apply planned project adjustment"
+            )
         )
 
         if apply_project_adjustments:
+            latest_spend_month = (
+                period_spend["year_month"].max()
+            )
+
             months_remaining_preview = (
-                (period_end.year - period_spend["year_month"].max().year) * 12
-                + (period_end.month - period_spend["year_month"].max().month)
+                (
+                    period_end.year
+                    - latest_spend_month.year
+                )
+                * 12
+                + (
+                    period_end.month
+                    - latest_spend_month.month
+                )
             )
 
-            future_months = pd.date_range(
-                start=period_spend["year_month"].max() + pd.DateOffset(months=1),
-                periods=months_remaining_preview,
-                freq="MS"
-            )
+            if months_remaining_preview > 0:
+                future_months = pd.date_range(
+                    start=(
+                        latest_spend_month
+                        + pd.DateOffset(months=1)
+                    ),
+                    periods=(
+                        months_remaining_preview
+                    ),
+                    freq="MS",
+                )
 
-            adjustment_df = pd.DataFrame({
-                "month": future_months.strftime("%Y-%m"),
-                "project_adjustment": [0.0] * months_remaining_preview
-            })
+                adjustment_df = pd.DataFrame(
+                    {
+                        "month": (
+                            future_months.strftime(
+                                "%Y-%m"
+                            )
+                        ),
+                        "project_adjustment": (
+                            [0.0]
+                            * months_remaining_preview
+                        ),
+                    }
+                )
 
-            edited_adjustment_df = st.data_editor(
-                adjustment_df,
-                use_container_width=True,
-                disabled=["month"]
-            )
+                edited_adjustment_df = (
+                    st.data_editor(
+                        adjustment_df,
+                        use_container_width=True,
+                        disabled=["month"],
+                        hide_index=True,
+                    )
+                )
 
-            project_adjustments = edited_adjustment_df["project_adjustment"].tolist()
+                project_adjustments = (
+                    pd.to_numeric(
+                        edited_adjustment_df[
+                            "project_adjustment"
+                        ],
+                        errors="coerce",
+                    )
+                    .fillna(0.0)
+                    .tolist()
+                )
+
+            else:
+                st.info(
+                    (
+                        "There are no future months "
+                        "remaining in the commitment "
+                        "period."
+                    )
+                )
 
     else:
         st.warning(
-            "No historical spend data was found for this cloud and commitment period. At least one month of historical spend data is required to generate a forecast."
+            (
+                "No historical spend data was found "
+                "for this cloud and commitment "
+                "period. At least one month of "
+                "historical spend data is required "
+                "to generate a forecast."
+            )
         )
-
 
     st.subheader("3. Final Report")
 
-    if st.button("Generate Report"):
-        report = generate_cloud_report(
-            spend_data=spend_data,
-            commitments=commitments_data,
-            cloud=selected_cloud,
-            selected_method=selected_method,
-            project_adjustments=project_adjustments
+    generate_disabled = (
+        not has_historical_data
+        or selected_method is None
+    )
+
+    if st.button(
+        "Generate Report",
+        disabled=generate_disabled,
+        type="primary",
+    ):
+        try:
+            report = generate_cloud_report(
+                spend_data=spend_data,
+                commitments=commitments_data,
+                cloud=selected_cloud,
+                selected_method=selected_method,
+                project_adjustments=(
+                    project_adjustments
+                ),
+            )
+
+        except Exception as error:
+            st.error(
+                (
+                    "The report could not be "
+                    f"generated: {error}"
+                )
+            )
+
+            report = None
+
+        if report is not None:
+            failed_statuses = [
+                "Insufficient data",
+                "Forecast failed",
+            ]
+
+            if (
+                "status" in report
+                and report["status"]
+                in failed_statuses
+            ):
+                st.error(
+                    report.get(
+                        "message",
+                        "The forecast failed.",
+                    )
+                )
+
+                st.json(report)
+
+            else:
+                report = add_report_display_data(
+                    report=report,
+                    period_spend=period_spend,
+                    period_start=period_start,
+                )
+
+                st.session_state[
+                    "generated_report"
+                ] = report
+
+                st.session_state[
+                    "generated_report_cloud"
+                ] = selected_cloud
+
+    if (
+        st.session_state.generated_report
+        is not None
+    ):
+        current_report = (
+            st.session_state.generated_report
         )
 
-        if "status" in report and report["status"] in [
-            "Insufficient data",
-            "Forecast failed"
-        ]:
-            st.error(report["message"])
-            st.json(report)
-
-        else:
-            report = add_report_display_data(
-            report=report,
-            period_spend=period_spend,
-            period_start=period_start
+        current_cloud = (
+            st.session_state[
+                "generated_report_cloud"
+            ]
+            or current_report.get(
+                "cloud",
+                "Cloud",
             )
+        )
 
-            display_report(report)
+        display_report(current_report)
 
-            report_json = json.dumps(report, indent=4)
-
-            st.download_button(
-                label="Download Report",
-                data=report_json,
-                file_name=f"Overcast_{selected_cloud}_report.json",
-                mime="application/json"
-            )
+        display_download_buttons(
+            report=current_report,
+            cloud_name=current_cloud,
+        )
